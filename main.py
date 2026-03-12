@@ -7,3 +7,12 @@ if __name__ == "__main__":
     budget_mgr = BudgetManager(db)
     app = GUI(budget_mgr)
     app.mainloop()
+    
+    
+    
+    
+    
+    
+    
+    
+    

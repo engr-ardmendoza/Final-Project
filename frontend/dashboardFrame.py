@@ -88,6 +88,7 @@ class DashboardFrame(ctk.CTkFrame):
 
         ctk.CTkButton(input_box, text="Add Transaction", command=self.add_expense).pack(pady=5, fill="x")
         ctk.CTkButton(input_box, text="Delete Transaction", command=self.remove_expense).pack(pady=5, fill="x")
+        ctk.CTkButton(input_box, text="Edit Transaction", command=self.handle_edit_transaction).pack(pady=5, fill="x")
         
         ctk.CTkButton(self.sidebar, text="Logout", fg_color="#D32F2F", hover_color="#B71C1C",
                       command= lambda: self.controller.show_frame("LoginFrame")).pack(side="bottom", padx= 20, pady=(10, 20), fill="x")
@@ -220,6 +221,8 @@ class DashboardFrame(ctk.CTkFrame):
         tree_container.pack(fill="both", expand=True, padx=20, pady=10)
 
         self.tree = tk.ttk.Treeview(tree_container, columns=cols, show="headings", style="Treeview")
+        # Double-click a row to edit
+        self.tree.bind("<Double-1>", lambda event: self.handle_edit_transaction())
         
         for col in cols:
             self.tree.heading(col, text=col)
@@ -360,9 +363,11 @@ class DashboardFrame(ctk.CTkFrame):
                 
                 # Insert with combined tags
                 # First tag is always the DB ID, others are for styling
+                # Change this line inside your loop in refresh_ui:
                 self.tree.insert("", "end", 
-                                 values=(display_amt, tx.category, tx.type, tx.date),
-                                 tags=(tx.db_id, stripe_tag, type_tag))
+                                values=(display_amt, tx.category, tx.type, tx.date),
+                                # Add tx.description to the tags here!
+                                tags=(tx.db_id, tx.description, stripe_tag, type_tag))
             
             # 4. Update Balance Label
             bal = self.budget_manager.calculate_balance()
@@ -416,3 +421,106 @@ class DashboardFrame(ctk.CTkFrame):
 
         except Exception as e:
             messagebox.showerror("Export Error", f"An error occurred: {e}")
+            
+    def handle_edit_transaction(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Selection Required", "Please select a transaction to edit.")
+            return
+
+        # 1. Pull data from Treeview
+        # Columns: 0:Amount, 1:Category, 2:Type, 3:Date
+        item_data = self.tree.item(selected_item[0])
+        val = item_data['values']
+        tags = item_data['tags']
+        
+        db_id = tags[0]
+        existing_desc = tags[1] # Assumes you updated refresh_ui to store desc in tags
+
+        # 2. Window Setup
+        edit_win = ctk.CTkToplevel(self)
+        edit_win.title("Edit Transaction")
+        edit_win.geometry("400x600")
+        edit_win.attributes("-topmost", True)
+
+        # --- Description ---
+        ctk.CTkLabel(edit_win, text="Description:").pack(pady=(20, 0))
+        desc_entry = ctk.CTkEntry(edit_win, width=300)
+        desc_entry.insert(0, existing_desc)
+        desc_entry.pack(pady=5)
+
+        # --- Amount (Numeric Validation) ---
+        ctk.CTkLabel(edit_win, text="Amount:").pack()
+        amount_entry = ctk.CTkEntry(edit_win, width=300)
+        # Strip prefixes for the entry box
+        clean_amt = str(val[0]).replace("$", "").replace("+", "").replace("-", "").strip()
+        amount_entry.insert(0, clean_amt)
+        amount_entry.pack(pady=5)
+
+        # --- Category ---
+        ctk.CTkLabel(edit_win, text="Category:").pack()
+        category_dropdown = ctk.CTkComboBox(edit_win, values=["Food", "Rent", "Transport", "Entertainment", "Other"], width=300)
+        category_dropdown.set(val[1])
+        category_dropdown.pack(pady=5)
+
+        # --- Type ---
+        ctk.CTkLabel(edit_win, text="Type:").pack()
+        type_dropdown = ctk.CTkComboBox(edit_win, values=["Expense", "Income"], width=300)
+        type_dropdown.set(val[2])
+        type_dropdown.pack(pady=5)
+
+        # Logic: If initially Income, lock category
+        if val[2] == "Income":
+            category_dropdown.set("Income/Salary")
+            category_dropdown.configure(state="disabled")
+
+        def on_type_change(choice):
+            if choice == "Income":
+                category_dropdown.set("Income/Salary")
+                category_dropdown.configure(state="disabled")
+            else:
+                category_dropdown.configure(state="normal")
+                # Don't overwrite if it was already an expense category
+                if category_dropdown.get() == "Income/Salary":
+                    category_dropdown.set("Other")
+
+        type_dropdown.configure(command=on_type_change)
+
+        def save_changes():
+            # 1. Recheck Amount for Alpha characters
+            raw_amt = amount_entry.get().strip()
+            try:
+                # This check prevents letters from being saved
+                final_amt = float(raw_amt)
+                if final_amt < 0:
+                    messagebox.showerror("Error", "Amount cannot be negative.")
+                    return
+            except ValueError:
+                messagebox.showerror("Invalid Input", "Please enter a number only for the amount.")
+                return
+
+            # 2. Recheck Income Logic
+            final_type = type_dropdown.get()
+            final_cat = "Income/Salary" if final_type == "Income" else category_dropdown.get()
+
+            try:
+                # 3. Create the object for the Database
+                updated_t = Transaction(
+                    db_id=db_id,
+                    amount=final_amt,
+                    category=final_cat,
+                    description=desc_entry.get(),
+                    t_type=final_type,
+                    date=val[3] # Preserves original timestamp
+                )
+
+                # 4. Push to DB
+                self.budget_manager.db.update_transaction(updated_t)
+                messagebox.showinfo("Success", "Transaction updated successfully!")
+                self.refresh_ui()
+                edit_win.destroy()
+            except Exception as e:
+                messagebox.showerror("System Error", f"Could not update: {e}")
+
+        ctk.CTkButton(edit_win, text="Save Changes", fg_color="#2ecc71", 
+                      hover_color="#27ae60", command=save_changes).pack(pady=30)

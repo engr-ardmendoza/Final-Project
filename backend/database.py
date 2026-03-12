@@ -229,3 +229,13 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database Error: {e}")
             return 0.0
+        
+        
+    def update_transaction(self, t):
+        """Update an existing financial record using its unique ID."""
+        self.cursor.execute('''
+            UPDATE transactions 
+            SET amount = ?, category = ?, description = ?, type = ?, date = ?
+            WHERE id = ?''', 
+            (t.amount, t.category, t.description, t.type, t.date, t.db_id))
+        self.conn.commit()
