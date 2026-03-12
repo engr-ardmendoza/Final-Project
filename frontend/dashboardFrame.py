@@ -86,14 +86,17 @@ class DashboardFrame(ctk.CTkFrame):
         self.desc_entry = ctk.CTkEntry(input_box, placeholder_text="Description")
         self.desc_entry.pack(pady=5, fill="x")
 
-        ctk.CTkButton(input_box, text="Add Transaction", command=self.add_expense).pack(pady=5, fill="x")
-        ctk.CTkButton(input_box, text="Delete Transaction", command=self.remove_expense).pack(pady=5, fill="x")
-        ctk.CTkButton(input_box, text="Edit Transaction", command=self.handle_edit_transaction).pack(pady=5, fill="x")
+        self.add_btn = ctk.CTkButton(input_box, text="Add Transaction", command=self.add_expense)
+        self.add_btn.pack(pady=5, fill="x")
+        self.delete_btn = ctk.CTkButton(input_box, text="Delete Transaction", fg_color="#D32F2F", command=self.remove_expense)
+        self.edit_btn = ctk.CTkButton(input_box, text="Edit Transaction", command=self.handle_edit_transaction)
         
         ctk.CTkButton(self.sidebar, text="Logout", fg_color="#D32F2F", hover_color="#B71C1C",
                       command= lambda: self.controller.show_frame("LoginFrame")).pack(side="bottom", padx= 20, pady=(10, 20), fill="x")
         ctk.CTkButton(self.sidebar, text="Change Password", hover_color=("gray70", "gray30"),
                       command= lambda: self.controller.show_frame("ChangePasswordFrame")).pack(side="bottom", padx= 20, fill="x")
+        
+        
 
     def show_calendar_view(self):
         """Switches the panel to the Calendar View."""
@@ -223,6 +226,10 @@ class DashboardFrame(ctk.CTkFrame):
         self.tree = tk.ttk.Treeview(tree_container, columns=cols, show="headings", style="Treeview")
         # Double-click a row to edit
         self.tree.bind("<Double-1>", lambda event: self.handle_edit_transaction())
+        self.tree.bind("<Delete>", lambda event: self.remove_expense())
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+        self.tree.bind("<Button-1>", self.handle_click_outside)
+        self.tree.bind("<Escape>", lambda e: self.clear_selection())
         
         for col in cols:
             self.tree.heading(col, text=col)
@@ -290,20 +297,30 @@ class DashboardFrame(ctk.CTkFrame):
     # --- Core Functionality ---
 
     def add_expense(self):
-        amount = self.amount_entry.get()
+        amount_raw = self.amount_entry.get()
         t_type = self.type_var.get()
         
         category = self.category_combo.get() if t_type == "Expense" else "Income/Salary"
         desc = self.desc_entry.get()
 
-        if not amount:
+        if not amount_raw:
             messagebox.showwarning("Error", "Please enter an amount")
+            return
+        
+        if self.category_combo.get() == "Select Category" and t_type == "Expense":
+            messagebox.showwarning("Error", "Please select what type of Expense is this")
             return
 
         try:
+            amount = float(amount_raw)
+            # --- NEW VALIDATION ---
+            if amount <= 0:
+                messagebox.showwarning("Error", "Amount must be a positive number")
+                return
+            # ----------------------
+
             user_id = self.controller.current_user_id
-        
-            new_tx = Transaction(None, float(amount), category, desc, t_type)
+            new_tx = Transaction(None, amount, category, desc, t_type)
             
             self.budget_manager.add_transaction(user_id, new_tx)
             
@@ -311,25 +328,32 @@ class DashboardFrame(ctk.CTkFrame):
             self.desc_entry.delete(0, 'end')
             self.refresh_ui()
         except ValueError:
-            messagebox.showerror("Error", "Invalid amount")
+            messagebox.showerror("Error", "Invalid amount. Please enter a valid number.")
             
     def remove_expense(self):
-        selected_item = self.tree.selection()
-        
-        if not selected_item:
-            messagebox.showwarning("Selection Error", "Please select a transaction to delete.")
-            return
+        try: 
+            selected_item = self.tree.selection()
+            if not selected_item:
+                messagebox.showwarning("Selection Error", "Please select a transaction to delete")
+                return
 
-        confirm = messagebox.askyesno("Confirm", "Are you sure you want to delete this?")
-        if confirm:
-            # 1. Pull the hidden database ID from the tags
-            db_id = self.tree.item(selected_item[0])['tags'][0]
-            
-            # 2. Tell the manager to delete by ID
-            self.budget_manager.db.delete_transaction(db_id)
-            
-            # 3. Refresh
-            self.refresh_ui()
+            confirm = messagebox.askyesno("Confirm", "Are you sure you want to delete this?")
+            if confirm:
+                # 1. Pull the hidden database ID from the tags
+                db_id = self.tree.item(selected_item[0])['tags'][0]
+                
+                # 2. Tell the manager to delete by ID
+                self.budget_manager.db.delete_transaction(db_id)
+                
+                # 3. Refresh
+                self.refresh_ui()
+                
+                # FORCE HIDE after deletion
+                self.edit_btn.pack_forget()
+                self.delete_btn.pack_forget()
+                
+        except ValueError:
+            messagebox.showerror("Selection Error", "Please select a transaction to delete")
     
     def refresh_ui(self):
         """Updates data depending on which view is currently active with modern styling."""
@@ -376,7 +400,10 @@ class DashboardFrame(ctk.CTkFrame):
             
         elif self.current_view == "analytics":
             # Ensure visualizer uses the updated transaction list
-            self.visualizer.draw_chart(self.visualizer.current_chart_type)
+            if hasattr(self, 'visualizer'):
+                # Use a default "Pie" just in case current_chart_type is missing
+                chart = getattr(self.visualizer, 'current_chart_type', "Pie")
+                self.visualizer.draw_chart(chart)
             
     def export_to_excel(self):
         """Converts current transaction history into an Excel spreadsheet."""
@@ -422,105 +449,92 @@ class DashboardFrame(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Export Error", f"An error occurred: {e}")
             
+    def on_tree_select(self, event=None):
+        selected = self.tree.selection()
+        
+        if selected:
+            item_data = self.tree.item(selected[0])
+            val = item_data['values']
+            tags = item_data['tags']
+            
+            # 1. Store the Database ID (stored in the first tag)
+            self.editing_id = tags[0] 
+            
+            # 2. Clean the amount (remove $ and +/-)
+            clean_amt = str(val[0]).replace("$", "").replace("+", "").replace("-", "").strip()
+            
+            # 3. Auto-fill the sidebar fields
+            self.amount_entry.delete(0, 'end')
+            self.amount_entry.insert(0, clean_amt)
+            
+            # Tags[1] is the description we passed in refresh_ui
+            self.desc_entry.delete(0, 'end')
+            self.desc_entry.insert(0, tags[1] if len(tags) > 1 else "") 
+            
+            self.type_var.set(val[2])
+            self.toggle_inputs(val[2])
+            
+            if val[2] == "Expense":
+                self.category_combo.set(val[1])
+
+            # 4. Show Edit/Delete buttons (they only appear when a row is clicked)
+            # 1. SWAP BUTTONS: Hide Add, Show Edit/Delete
+            self.add_btn.pack_forget() 
+            self.edit_btn.pack(pady=5, fill="x", after=self.desc_entry)
+            self.delete_btn.pack(pady=5, fill="x", after=self.edit_btn)
+        else:
+            # Nothing selected? Reset UI
+            self.editing_id = None
+            self.clear_sidebar_fields()
+
     def handle_edit_transaction(self):
-        selected_item = self.tree.selection()
-        if not selected_item:
-            messagebox.showwarning("Selection Required", "Please select a transaction to edit.")
+        if not self.editing_id:
+            messagebox.showwarning("Selection Required", "Please select a transaction.")
             return
 
-        # 1. Pull data from Treeview
-        # Columns: 0:Amount, 1:Category, 2:Type, 3:Date
-        item_data = self.tree.item(selected_item[0])
-        val = item_data['values']
-        tags = item_data['tags']
+        try:
+            amount = float(self.amount_entry.get())
+            t_type = self.type_var.get()
+            category = self.category_combo.get() if t_type == "Expense" else "Income/Salary"
+            description = self.desc_entry.get()
+            
+            # Preserve the original date from the table
+            selected_item = self.tree.selection()[0]
+            original_date = self.tree.item(selected_item)['values'][3]
+
+            updated_tx = Transaction(
+                db_id=self.editing_id,
+                amount=amount,
+                category=category,
+                description=description,
+                t_type=t_type,
+                date=original_date
+            )
+
+            self.budget_manager.db.update_transaction(updated_tx)
+            messagebox.showinfo("Success", "Transaction updated!")
+            
+            self.refresh_ui()
+            self.clear_sidebar_fields()
+            
+        except ValueError:
+            messagebox.showerror("Error", "Invalid amount. Please enter a number.")
+            
+    def handle_click_outside(self, event):
+        region = self.tree.identify_region(event.x, event.y)
+        if region == "nothing":
+            self.tree.selection_remove(self.tree.selection())
+            self.on_tree_select() # This resets the sidebar
+
+    def clear_sidebar_fields(self):
+        self.amount_entry.delete(0, 'end')
+        self.desc_entry.delete(0, 'end')
+        self.category_combo.set("Select Category")
         
-        db_id = tags[0]
-        existing_desc = tags[1] # Assumes you updated refresh_ui to store desc in tags
-
-        # 2. Window Setup
-        edit_win = ctk.CTkToplevel(self)
-        edit_win.title("Edit Transaction")
-        edit_win.geometry("400x600")
-        edit_win.attributes("-topmost", True)
-
-        # --- Description ---
-        ctk.CTkLabel(edit_win, text="Description:").pack(pady=(20, 0))
-        desc_entry = ctk.CTkEntry(edit_win, width=300)
-        desc_entry.insert(0, existing_desc)
-        desc_entry.pack(pady=5)
-
-        # --- Amount (Numeric Validation) ---
-        ctk.CTkLabel(edit_win, text="Amount:").pack()
-        amount_entry = ctk.CTkEntry(edit_win, width=300)
-        # Strip prefixes for the entry box
-        clean_amt = str(val[0]).replace("$", "").replace("+", "").replace("-", "").strip()
-        amount_entry.insert(0, clean_amt)
-        amount_entry.pack(pady=5)
-
-        # --- Category ---
-        ctk.CTkLabel(edit_win, text="Category:").pack()
-        category_dropdown = ctk.CTkComboBox(edit_win, values=["Food", "Rent", "Transport", "Entertainment", "Other"], width=300)
-        category_dropdown.set(val[1])
-        category_dropdown.pack(pady=5)
-
-        # --- Type ---
-        ctk.CTkLabel(edit_win, text="Type:").pack()
-        type_dropdown = ctk.CTkComboBox(edit_win, values=["Expense", "Income"], width=300)
-        type_dropdown.set(val[2])
-        type_dropdown.pack(pady=5)
-
-        # Logic: If initially Income, lock category
-        if val[2] == "Income":
-            category_dropdown.set("Income/Salary")
-            category_dropdown.configure(state="disabled")
-
-        def on_type_change(choice):
-            if choice == "Income":
-                category_dropdown.set("Income/Salary")
-                category_dropdown.configure(state="disabled")
-            else:
-                category_dropdown.configure(state="normal")
-                # Don't overwrite if it was already an expense category
-                if category_dropdown.get() == "Income/Salary":
-                    category_dropdown.set("Other")
-
-        type_dropdown.configure(command=on_type_change)
-
-        def save_changes():
-            # 1. Recheck Amount for Alpha characters
-            raw_amt = amount_entry.get().strip()
-            try:
-                # This check prevents letters from being saved
-                final_amt = float(raw_amt)
-                if final_amt < 0:
-                    messagebox.showerror("Error", "Amount cannot be negative.")
-                    return
-            except ValueError:
-                messagebox.showerror("Invalid Input", "Please enter a number only for the amount.")
-                return
-
-            # 2. Recheck Income Logic
-            final_type = type_dropdown.get()
-            final_cat = "Income/Salary" if final_type == "Income" else category_dropdown.get()
-
-            try:
-                # 3. Create the object for the Database
-                updated_t = Transaction(
-                    db_id=db_id,
-                    amount=final_amt,
-                    category=final_cat,
-                    description=desc_entry.get(),
-                    t_type=final_type,
-                    date=val[3] # Preserves original timestamp
-                )
-
-                # 4. Push to DB
-                self.budget_manager.db.update_transaction(updated_t)
-                messagebox.showinfo("Success", "Transaction updated successfully!")
-                self.refresh_ui()
-                edit_win.destroy()
-            except Exception as e:
-                messagebox.showerror("System Error", f"Could not update: {e}")
-
-        ctk.CTkButton(edit_win, text="Save Changes", fg_color="#2ecc71", 
-                      hover_color="#27ae60", command=save_changes).pack(pady=30)
+        # 1. Hide the Edit and Delete buttons first
+        self.edit_btn.pack_forget()
+        self.delete_btn.pack_forget()
+        
+        # 2. Pack the Add button relative to the Description entry 
+        # (Since desc_entry is always visible, this won't crash)
+        self.add_btn.pack(pady=5, fill="x", after=self.desc_entry)

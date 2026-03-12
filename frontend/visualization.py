@@ -18,11 +18,14 @@ class Visualization:
         self.container = container
         self.budget_manager = budget_manager
         self.canvas = None  # Holds the FigureCanvasTkAgg object
+        self.current_chart_type = "Pie"
 
     def draw_chart(self, chart_type="Pie"):
         """
         Generates a specific plot based on chart_type and embeds it into the GUI.
         """
+        
+        self.current_chart_type = chart_type
         # Clear the previous chart from the UI if it exists
         if self.canvas:
             self.canvas.get_tk_widget().destroy()

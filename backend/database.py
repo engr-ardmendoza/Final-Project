@@ -230,7 +230,6 @@ class Database:
             print(f"Database Error: {e}")
             return 0.0
         
-        
     def update_transaction(self, t):
         """Update an existing financial record using its unique ID."""
         self.cursor.execute('''

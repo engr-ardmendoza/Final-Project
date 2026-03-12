@@ -289,10 +289,24 @@ class AdminFrame(ctk.CTkFrame):
         """Updates a user's password directly via administrative override."""
         user = self.pw_dropdown.get()
         new_pw = self.new_pw_entry.get()
-        if user and new_pw:
-            self.budget_manager.db.reset_password(user, new_pw)
-            messagebox.showinfo("Success", f"Password for {user} has been reset.")
+
+        if not user or user == "Select User": # Basic validation
+            messagebox.showwarning("Input Error", "Please select a user.")
+            return
+
+        if not new_pw:
+            messagebox.showwarning("Input Error", "Please enter a new password.")
+            return
+
+        # 1. Capture the success status and the message from the DB method
+        success, message = self.budget_manager.db.reset_password(user, new_pw)
+
+        if success:
+            messagebox.showinfo("Success", message)
             self.new_pw_entry.delete(0, 'end')
+        else:
+            # 2. Show the specific validation error (e.g., "Password too short")
+            messagebox.showerror("Validation Error", message)
 
     def handle_delete(self):
         """Deletes a user account. Prevents deletion of the master account."""
